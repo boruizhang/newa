@@ -3,21 +3,29 @@ This is a file to import, with helper functions.
 
 It also has the experiments (copied from notebooks)
 """
+from collections import defaultdict
 import inspect
+import itertools
 import os
 import re
+import sqlite3
 import subprocess
 import sys
+
 import nltk
+from nltk.tokenize import WhitespaceTokenizer
+import NERDA
 
 def conlleval(toks, trues, preds):
-    """
-    takes lists of tokens, true labels, and predictions
+    """takes lists of tokens, true labels, and predictions
 
-    returns num_tokens, num_phrases, num_found, num_correct, accuracy, precision, recall, fb1
+    returns dict of num_tokens, num_phrases, num_found, num_correct,
+    accuracy, precision, recall, fb1
 
-    This fuction runs the conlleval.py script by opening a subprocess and writing/piping
-    three columns of tab separated values: token \t true_label \t predicted value
+    This fuction runs the conlleval.py script by opening a subprocess
+    and writing/piping three columns of tab separated values: token \t
+    true_label \t predicted value
+
     """
     p1 = subprocess.Popen(["cat"], stdout=subprocess.PIPE, stdin=subprocess.PIPE)
     p2 = subprocess.Popen(["./conlleval.pl", "-d", "\t"], stdin=p1.stdout, stdout=subprocess.PIPE,
@@ -34,7 +42,15 @@ def conlleval(toks, trues, preds):
     pattern = re.compile(r"processed (\d+) tokens with (\d+) phrases; *found: (\d*) phrases; *correct: (\d+).\naccuracy: *(\d*\.\d*)%; *precision: *(\d*\.\d*)%; *recall: +(\d*\.\d*)%; *FB1: *(\d*\.\d*)",
                          re.MULTILINE)
     match = re.search(pattern, output)
-    return match.groups()
+    results = {"num_tokens": int(match.group(1)),
+               "num_phrases": int(match.group(2)),
+               "num_found": int(match.group(3)),
+               "num_correct": int(match.group(4)),
+               "accuracy": float(match.group(5)),
+               "precision": float(match.group(6)),
+               "recall": float(match.group(7)),
+               "fb1": float(match.group(8))}
+    return results
 
 def get_labeled_tokens(infilename="just_ec.conll"):
     """ reads the data from conll format, default file just_ec.conll"""
@@ -65,6 +81,8 @@ def flatten_lol(lol):
 
 
 def experiment_001_naive_bayes_unigram():
+    """this is a simple experiment that just uses the current word to
+    predict the tag"""
     labeled_tokens = get_labeled_tokens()
     train, test = make_train_test(labeled_tokens)
     trainfeat = [({"word": tok}, lab) for (tok, lab) in train]
@@ -76,7 +94,10 @@ def experiment_001_naive_bayes_unigram():
     test_toks, test_true = zip(*test)
     # considering inspect.currentframe().f_code.co_name as a way to
     # keep track of experiments, when running a battery of experiments
-    return conlleval(test_toks, test_true, test_pred), inspect.currentframe().f_code.co_name
+    results = conlleval(test_toks, test_true, test_pred)
+    experiment_name = inspect.currentframe().f_code.co_name
+    results["experiment_name"] = experiment_name
+    return results
 
 def featurize_wordandtag_pseudo_bigram(tokens, classify=False):
     """input is a list/iterable of tokens, output/generator is list of dictionary features, like
@@ -99,7 +120,7 @@ def featurize_wordandtag_pseudo_bigram(tokens, classify=False):
             lab = classify(feature_dict)
         prev_lab = lab
         yield feature_dict, lab
-        
+
 def experiment_002_naive_bayes_pseudo_bigram_dishonest():
     """this is dishonest because it uses the true previous tags: it
     should use the predicted previous tags
@@ -115,10 +136,14 @@ def experiment_002_naive_bayes_pseudo_bigram_dishonest():
     #train_pred = list(map(classifier.classify, [tok for tok, lab in trainfeat]))
     #train_toks, train_true = zip(*train)
     #conlleval(train_toks, train_true, train_pred)
-    
+
     test_pred = list(map(classifier.classify, [tok for tok, lab in testfeat]))
     test_toks, test_true = zip(*test)
-    return conlleval(test_toks, test_true, test_pred)
+    results = conlleval(test_toks, test_true, test_pred)
+
+    experiment_name = inspect.currentframe().f_code.co_name
+    results["experiment_name"] = experiment_name
+    return results
 
 
 def experiment_002_naive_bayes_pseudo_bigram_honest():
@@ -136,17 +161,26 @@ def experiment_002_naive_bayes_pseudo_bigram_honest():
     #train_pred = list(map(classifier.classify, [tok for tok, lab in trainfeat]))
     #train_toks, train_true = zip(*train)
     #util.conlleval(train_toks, train_true, train_pred)
-    
+
     # this way should be more fair/honest
     #train_pred = list(featurize_wordandtag_bigram(train, classify=classifier.classify))
     #util.conlleval(train_toks, train_true, [pred for _, pred in train_pred])
-    
+
     # fair/honest for test
-    test_pred = list(featurize_wordandtag_pseudo_bigram(test, classify=classifier.classify))
+    testfeat_pred = list(featurize_wordandtag_pseudo_bigram(test, classify=classifier.classify))
+    test_pred = [pred for _, pred in testfeat_pred]
     test_toks, test_true = zip(*test)
-    return conlleval(test_toks, test_true, [pred for _, pred in test_pred])
+
+    results = conlleval(test_toks, test_true, test_pred)
+
+    experiment_name = inspect.currentframe().f_code.co_name
+    results["experiment_name"] = experiment_name
+    return results
+
 
 def experiment_003_maxent_pseudo_bigram():
+    """this is a maximum entropy model that uses the current and
+    preceding words as separate features (not joint)"""
     labeled_tokens = get_labeled_tokens()
     train, test = make_train_test(labeled_tokens)
 
@@ -163,9 +197,19 @@ def experiment_003_maxent_pseudo_bigram():
     #conlleval(train_toks, train_true, [pred for _, pred in train_pred])
 
     # fair/honest for test
-    test_pred = list(featurize_wordandtag_pseudo_bigram(test, classify=classifier.classify))
+    testfeat_pred = list(featurize_wordandtag_pseudo_bigram(test, classify=classifier.classify))
+    test_pred = [pred for _, pred in testfeat_pred]
+
     test_toks, test_true = zip(*test)
-    return conlleval(test_toks, test_true, [pred for _, pred in test_pred])
+    print(test_toks)
+    print(test_true)
+    print(test_pred)
+    results = conlleval(test_toks, test_true, test_pred)
+
+    experiment_name = inspect.currentframe().f_code.co_name
+    results["experiment_name"] = experiment_name
+    return results
+
 
 
 def featurize_wordandtag_bigram(tokens, classify=False):
@@ -193,8 +237,10 @@ def featurize_wordandtag_bigram(tokens, classify=False):
             lab = classify(feature_dict)
         prev_lab = lab
         yield feature_dict, lab
-                
+
 def experiment_004_maxent_bigram():
+    """ this is a maxent model using proper bigrams"""
+
     labeled_tokens = get_labeled_tokens()
     train, test = make_train_test(labeled_tokens)
 
@@ -211,13 +257,181 @@ def experiment_004_maxent_bigram():
     #conlleval(train_toks, train_true, [pred for _, pred in train_pred])
 
     # fair/honest for test
-    test_pred = list(featurize_wordandtag_bigram(test, classify=classifier.classify))
+    testfeat_pred = list(featurize_wordandtag_bigram(test, classify=classifier.classify))
+    test_pred = [pred for _, pred in testfeat_pred]
     test_toks, test_true = zip(*test)
-    return conlleval(test_toks, test_true, [pred for _, pred in test_pred])
+    results = conlleval(test_toks, test_true, test_pred)
 
-if __name__ == "__main__":
+    experiment_name = inspect.currentframe().f_code.co_name
+    results["experiment_name"] = experiment_name
+    return results
+
+def nerda_format(data):
+    """ from Bri's notebook """
+    ner = defaultdict(list)
+    for line1,line2 in itertools.zip_longest(*[data]*2):
+        sents = []
+        tags = []
+        tk = WhitespaceTokenizer()
+        tokens = iter(tk.tokenize(line1))
+        current_tag = "O"
+        for token in tokens:
+            suffix = ""
+            if token in line2:
+                suffix = "-V"
+                # Good: even if the verb is complex (aka spaced
+                # out),suffix can still apply to the entire phrase
+
+                # Bad: false positive -V may occur, if one word that
+                # has multiple meanings occurring more than one time
+                # in the same sentence
+            try:
+                if token == "[":
+                    current_tag = "I"
+                    tags.append("B" + suffix)
+                    sents.append(next(tokens))
+                elif token == "]":
+                    current_tag = "O"
+                    #     tags.append(current_tag+suffix)
+                    #     sents.append(next(tokens))
+                else:
+                    tags.append(current_tag+suffix)
+                    sents.append(token)
+            except StopIteration:
+                pass
+        ner['sentences'].append(sents)
+        ner['tags'].append(tags)
+    return ner
+
+def nerda_format_just_iob(data):
+    """just IOB"""
+    ner = defaultdict(list)
+    for line1,line2 in itertools.zip_longest(*[data]*2):
+        sents = []
+        tags = []
+        tk = WhitespaceTokenizer()
+        tokens = iter(tk.tokenize(line1))
+        current_tag = "O"
+        for token in tokens:
+            try:
+                if token == "[":
+                    current_tag = "I"
+                    tags.append("B")
+                    sents.append(next(tokens))
+                elif token == "]":
+                    current_tag = "O"
+                        #     tags.append(current_tag+suffix)
+                        #     sents.append(next(tokens))
+                else:
+                    tags.append(current_tag)
+                    sents.append(token)
+            except StopIteration:
+                pass
+        ner['sentences'].append(sents)
+        ner['tags'].append(tags)
+    return ner
+
+
+def make_nerda_train_dev_test(format_fn=nerda_format):
+    """ return the 3 data partition in nerda format
+
+    pass in the format function: Bri's original is the default
+
+    to use conlleval, we need nerda_format_just_iob
+    """
+
+    with open('for_ml/train.txt') as data:
+        train = format_fn(data)
+        #  t['sentences'] = ner['sentences']
+        #  t['tags'] = ner['tags']
+
+    with open('for_ml/dev.txt') as data:
+        dev  = format_fn(data)
+        #d['sentences'] = ner['sentences']
+        #d['tags'] = ner['tags']
+
+    with open('for_ml/test.txt') as data:
+        test = format_fn(data)
+        #  test['sentences'] = ner['sentences']
+        #  test['tags'] = ner['tags']
+
+    return train, dev, test
+
+
+def experiment_005_bri_nerda():
+    """ uses Bri's model but conll chunk evaluation  """
+    train, dev, test = make_nerda_train_dev_test(format_fn=nerda_format_just_iob)
+    tag_scheme = ['B', 'I']
+
+    model = NERDA(
+        dataset_training = train,
+        dataset_validation = dev,
+        tag_scheme = tag_scheme,
+        tag_outside = 'O',
+        transformer = 'bert-base-multilingual-cased',
+        hyperparameters = {'epochs' : 11,
+                           'warmup_steps' : 10,
+                           'train_batch_size': 5,
+                           'learning_rate': 0.0001})
+    model.train()
+    model.evaluate_performance(test)
+    pred_test  = model.predict(test['sentences'])
+    results = conlleval(flatten_lol(test['sentences']),
+                        flatten_lol(test['tags']),
+                        flatten_lol(pred_test))
+
+    experiment_name = inspect.currentframe().f_code.co_name
+    results["experiment_name"] = experiment_name
+    return results
+
+def main():
     """ runs all the experiment functions """
-    experiments = sorted([item for item in dir() if item.startswith("experiment")])
+    # create table to store results
+    connection = sqlite3.connect("results.db")
+    cursor = connection.cursor()
+    cursor.execute('''
+    create table if not exists conlleval
+    (
+      experiment_name text not null,
+      num_tokens integer not null,
+      num_phrases integer not null,
+      num_found integer not null,
+      num_correct integer not null,
+      accuracy real not null,
+      precision real not null,
+      recall real not null,
+      fb1 real not null,
+      constraint conlleval_pk primary key (experiment_name)
+    );
+    ''')
+
+    experiments = sorted([item for item in globals() if item.startswith("experiment")])
     for experiment in experiments:
         print(experiment)
-        globals()[experiment]()
+        cursor.execute("select * from conlleval where experiment_name = ?", (experiment, ))
+        results = cursor.fetchone()
+        if results:
+            print("results cached", results)
+        else:
+            results = globals()[experiment]()
+            cursor.execute("""
+            insert into conlleval
+            (experiment_name,  num_tokens, num_phrases, num_found, num_correct, accuracy, precision, recall, fb1)
+            values (
+            :experiment_name,
+            :num_tokens,
+            :num_phrases,
+            :num_found,
+            :num_correct,
+            :accuracy,
+            :precision,
+            :recall,
+            :fb1
+            );
+            """, results)
+            print(results)
+            connection.commit()
+
+if __name__ == "__main__":
+    main()
+
