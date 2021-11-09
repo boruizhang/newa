@@ -425,6 +425,27 @@ def experiment_011_naive_bayes_unigram():
     results["experiment_name"] = experiment_name
     return results
 
+def experiment_011_maxent_unigram():
+    
+    train_nerda, dev_nerda, test_nerda = make_nerda_train_dev_test(format_fn=nerda_format_just_iob)
+    train = to_padded_tok_tag_tuples_from_nerda(train_nerda)
+    #dev_tup = to_padded_tok_tag_tuples_from_nerda(dev_nerda)
+    test = to_padded_tok_tag_tuples_from_nerda(test_nerda)
+    
+    trainfeat = [({"word": tok}, lab) for (tok, lab) in train]
+    testfeat  = [({"word": tok}, lab) for (tok, lab) in test]
+    classifier = nltk.MaxentClassifier.train(trainfeat)
+    train_pred = list(map(classifier.classify, [tok for tok, lab in trainfeat]))
+    test_pred = list(map(classifier.classify, [tok for tok, lab in testfeat]))
+    train_toks, train_true = zip(*train)
+    test_toks, test_true = zip(*test)
+    # considering inspect.currentframe().f_code.co_name as a way to
+    # keep track of experiments, when running a battery of experiments
+    results = conlleval(test_toks, test_true, test_pred)
+    experiment_name = inspect.currentframe().f_code.co_name
+    results["experiment_name"] = experiment_name
+    return results
+
 def experiment_012_naive_bayes_pseudo_bigram_dishonest():
     """this is dishonest because it uses the true previous tags: it
     should use the predicted previous tags
@@ -511,6 +532,36 @@ def experiment_013_maxent_pseudo_bigram():
     testfeat_pred = list(featurize_wordandtag_pseudo_bigram(test, classify=classifier.classify))
     test_pred = [pred for _, pred in testfeat_pred]
 
+    test_toks, test_true = zip(*test)
+    results = conlleval(test_toks, test_true, test_pred)
+
+    experiment_name = inspect.currentframe().f_code.co_name
+    results["experiment_name"] = experiment_name
+    return results
+
+def experiment_014_naivebayes_bigram():
+    """ this is a bigram model using proper bigrams"""
+    train_nerda, dev_nerda, test_nerda = make_nerda_train_dev_test(format_fn=nerda_format_just_iob)
+    train = to_padded_tok_tag_tuples_from_nerda(train_nerda)
+    #dev_tup = to_padded_tok_tag_tuples_from_nerda(dev_nerda)
+    test = to_padded_tok_tag_tuples_from_nerda(test_nerda)
+    
+
+    trainfeat = list(featurize_wordandtag_bigram(train))
+    classifier = nltk.NaiveBayesClassifier.train(trainfeat)
+
+    # this way predicts over-optimistically because the preceding tags/labels are known
+    #train_pred = list(map(classifier.classify, [tok for tok, lab in trainfeat]))
+    #train_toks, train_true = zip(*train)
+    #util.conlleval(train_toks, train_true, train_pred)
+
+    # this way should be more fair/honest
+    #train_pred = list(featurize_wordandtag_bigram(train, classify=classifier.classify))
+    #conlleval(train_toks, train_true, [pred for _, pred in train_pred])
+
+    # fair/honest for test
+    testfeat_pred = list(featurize_wordandtag_bigram(test, classify=classifier.classify))
+    test_pred = [pred for _, pred in testfeat_pred]
     test_toks, test_true = zip(*test)
     results = conlleval(test_toks, test_true, test_pred)
 
@@ -614,6 +665,35 @@ def featurize_wordandtag_trigram(tokens, classify=False):
         prev_lab[-1] = lab
         yield feature_dict, lab
 
+def experiment_016_naivebayes_trigram():
+    """ this is a naive bayes model using trigrams"""
+    train_nerda, dev_nerda, test_nerda = make_nerda_train_dev_test(format_fn=nerda_format_just_iob)
+    train = to_padded_tok_tag_tuples_from_nerda(train_nerda)
+    #dev_tup = to_padded_tok_tag_tuples_from_nerda(dev_nerda)
+    test = to_padded_tok_tag_tuples_from_nerda(test_nerda)
+    
+
+    trainfeat = list(featurize_wordandtag_trigram(train))
+    classifier = nltk.NaiveBayesClassifier.train(trainfeat)
+
+    # this way predicts over-optimistically because the preceding tags/labels are known
+    #train_pred = list(map(classifier.classify, [tok for tok, lab in trainfeat]))
+    #train_toks, train_true = zip(*train)
+    #util.conlleval(train_toks, train_true, train_pred)
+
+    # this way should be more fair/honest
+    #train_pred = list(featurize_wordandtag_bigram(train, classify=classifier.classify))
+    #conlleval(train_toks, train_true, [pred for _, pred in train_pred])
+
+    # fair/honest for test
+    testfeat_pred = list(featurize_wordandtag_trigram(test, classify=classifier.classify))
+    test_pred = [pred for _, pred in testfeat_pred]
+    test_toks, test_true = zip(*test)
+    results = conlleval(test_toks, test_true, test_pred)
+
+    experiment_name = inspect.currentframe().f_code.co_name
+    results["experiment_name"] = experiment_name
+    return results
 
 def experiment_016_maxent_trigram():
     """ this is a maxent model using proper bigrams"""
@@ -645,6 +725,338 @@ def experiment_016_maxent_trigram():
     results["experiment_name"] = experiment_name
     return results
 
+def featurize_wordandtag_pseudo_bigram_backward(tokens, classify=False):
+    """input is a list/iterable of tokens, output/generator is list of dictionary features, like
+    [{word_nm1: the, word_n: dog}]
+    if tok == <s>, word_nm1 = "</s>" (padding)
+
+    it's called "psuedo" because it doesn't have true joint features,
+    just multiple features including previous word
+
+    """
+    next_tok = "<S>" # start of sentence marker
+    next_lab = "O"
+    output = []
+    for tok, lab in reversed(tokens):
+        feature_dict = {}
+        feature_dict["word_n"] = tok
+        feature_dict["word_n+1"] = next_tok
+        feature_dict["lab_n+1"] = next_lab
+        next_tok = tok
+        if classify: # this is the part that makes it honest fair, see below
+            lab = classify(feature_dict)
+        next_lab = lab
+        output.append((feature_dict, lab))
+    return(reversed(output))
+
+def experiment_022_naive_bayes_pseudo_bigram_dishonest_backward():
+    """ decode backward -- might help with head final language
+        
+        this is dishonest because it uses the true n+1 tags: it
+    should use the predicted n+1 tags
+
+    """
+    train_nerda, dev_nerda, test_nerda = make_nerda_train_dev_test(format_fn=nerda_format_just_iob)
+    train = to_padded_tok_tag_tuples_from_nerda(train_nerda)
+    #dev_tup = to_padded_tok_tag_tuples_from_nerda(dev_nerda)
+    test = to_padded_tok_tag_tuples_from_nerda(test_nerda)
+
+    trainfeat = list(featurize_wordandtag_pseudo_bigram_backward(train))
+    testfeat = list(featurize_wordandtag_pseudo_bigram_backward(test))
+    classifier = nltk.NaiveBayesClassifier.train(trainfeat)
+
+    #train_pred = list(map(classifier.classify, [tok for tok, lab in trainfeat]))
+    #train_toks, train_true = zip(*train)
+    #conlleval(train_toks, train_true, train_pred)
+
+    test_pred = list(map(classifier.classify, [tok for tok, lab in testfeat]))
+    test_toks, test_true = zip(*test)
+    results = conlleval(test_toks, test_true, test_pred)
+
+    experiment_name = inspect.currentframe().f_code.co_name
+    results["experiment_name"] = experiment_name
+    return results
+
+def experiment_022_naive_bayes_pseudo_bigram_honest_backward():
+    """uses the classify argument for the feature extractor so that tag
+    related features are based on predictions
+
+    """
+    train_nerda, dev_nerda, test_nerda = make_nerda_train_dev_test(format_fn=nerda_format_just_iob)
+    train = to_padded_tok_tag_tuples_from_nerda(train_nerda)
+    #dev_tup = to_padded_tok_tag_tuples_from_nerda(dev_nerda)
+    test = to_padded_tok_tag_tuples_from_nerda(test_nerda)
+    
+
+    trainfeat = list(featurize_wordandtag_pseudo_bigram_backward(train))
+    classifier = nltk.NaiveBayesClassifier.train(trainfeat)
+
+    # this way predicts over-optimistically because the preceding tags/labels are known
+    #train_pred = list(map(classifier.classify, [tok for tok, lab in trainfeat]))
+    #train_toks, train_true = zip(*train)
+    #util.conlleval(train_toks, train_true, train_pred)
+
+    # this way should be more fair/honest
+    #train_pred = list(featurize_wordandtag_bigram(train, classify=classifier.classify))
+    #util.conlleval(train_toks, train_true, [pred for _, pred in train_pred])
+
+    # fair/honest for test
+    testfeat_pred = list(featurize_wordandtag_pseudo_bigram_backward(test, classify=classifier.classify))
+    test_pred = [pred for _, pred in testfeat_pred]
+    test_toks, test_true = zip(*test)
+
+    results = conlleval(test_toks, test_true, test_pred)
+
+    experiment_name = inspect.currentframe().f_code.co_name
+    results["experiment_name"] = experiment_name
+    return results
+
+def experiment_023_maxent_pseudo_bigram_backward():
+    """this is a maximum entropy model that uses the current and
+    preceding words as separate features (not joint)"""
+    train_nerda, dev_nerda, test_nerda = make_nerda_train_dev_test(format_fn=nerda_format_just_iob)
+    train = to_padded_tok_tag_tuples_from_nerda(train_nerda)
+    #dev_tup = to_padded_tok_tag_tuples_from_nerda(dev_nerda)
+    test = to_padded_tok_tag_tuples_from_nerda(test_nerda)
+    
+
+    trainfeat = list(featurize_wordandtag_pseudo_bigram_backward(train))
+    classifier = nltk.MaxentClassifier.train(trainfeat)
+
+    # this way predicts over-optimistically because the preceding tags/labels are known
+    #train_pred = list(map(classifier.classify, [tok for tok, lab in trainfeat]))
+    #train_toks, train_true = zip(*train)
+    #conlleval(train_toks, train_true, train_pred)
+
+    # this way should be more fair/honest
+    #train_pred = list(featurize_wordandtag_pseudo_bigram(train, classify=classifier.classify))
+    #conlleval(train_toks, train_true, [pred for _, pred in train_pred])
+
+    # fair/honest for test
+    testfeat_pred = list(featurize_wordandtag_pseudo_bigram_backward(test, classify=classifier.classify))
+    test_pred = [pred for _, pred in testfeat_pred]
+
+    test_toks, test_true = zip(*test)
+    results = conlleval(test_toks, test_true, test_pred)
+
+    experiment_name = inspect.currentframe().f_code.co_name
+    results["experiment_name"] = experiment_name
+    return results
+
+def featurize_wordandtag_bigram_backward(tokens, classify=False):
+    """ backwards features
+    
+    actually the previous was not really bigram, only two word context
+    here's a better bigram using joint features
+
+    """
+    next_tok = "<S>" # end of sentence marker
+    next_lab = "O"
+    output = []
+    for tok, lab in reversed(tokens):
+        feature_dict = {}
+        feature_dict["word_n"] = tok
+        feature_dict["word_n+1"] = next_tok
+        feature_dict["word_n+1,word_n"] = next_tok + ","  + tok
+        feature_dict["lab_n+1"] = next_lab
+        feature_dict["lab_n+1,word_n"] = next_lab + ","  + tok
+        feature_dict["lab_n+1,word_n+1"] = next_lab + ","  + next_tok
+        feature_dict["lab_n+1,word_n+1,word_n"] = next_lab + ","  + next_tok + "," + tok
+        next_tok = tok
+        if classify: # this is the part that makes it honest fair, see below
+            lab = classify(feature_dict)
+        next_lab = lab
+        output.append((feature_dict, lab))
+    return(reversed(output))
+
+def experiment_024_naivebayes_bigram_backward():
+    """ this is a maxent model using proper bigrams, backward decoding"""
+    train_nerda, dev_nerda, test_nerda = make_nerda_train_dev_test(format_fn=nerda_format_just_iob)
+    train = to_padded_tok_tag_tuples_from_nerda(train_nerda)
+    #dev_tup = to_padded_tok_tag_tuples_from_nerda(dev_nerda)
+    test = to_padded_tok_tag_tuples_from_nerda(test_nerda)
+    
+
+    trainfeat = list(featurize_wordandtag_bigram_backward(train))
+    classifier = nltk.NaiveBayesClassifier.train(trainfeat)
+
+    # this way predicts over-optimistically because the preceding tags/labels are known
+    #train_pred = list(map(classifier.classify, [tok for tok, lab in trainfeat]))
+    #train_toks, train_true = zip(*train)
+    #util.conlleval(train_toks, train_true, train_pred)
+
+    # this way should be more fair/honest
+    #train_pred = list(featurize_wordandtag_bigram(train, classify=classifier.classify))
+    #conlleval(train_toks, train_true, [pred for _, pred in train_pred])
+
+    # fair/honest for test
+    testfeat_pred = list(featurize_wordandtag_bigram_backward(test, classify=classifier.classify))
+    test_pred = [pred for _, pred in testfeat_pred]
+    test_toks, test_true = zip(*test)
+    results = conlleval(test_toks, test_true, test_pred)
+
+    experiment_name = inspect.currentframe().f_code.co_name
+    results["experiment_name"] = experiment_name
+    return results
+    
+
+def experiment_024_maxent_bigram_backward():
+    """ this is a maxent model using proper bigrams, backward decoding"""
+    train_nerda, dev_nerda, test_nerda = make_nerda_train_dev_test(format_fn=nerda_format_just_iob)
+    train = to_padded_tok_tag_tuples_from_nerda(train_nerda)
+    #dev_tup = to_padded_tok_tag_tuples_from_nerda(dev_nerda)
+    test = to_padded_tok_tag_tuples_from_nerda(test_nerda)
+    
+
+    trainfeat = list(featurize_wordandtag_bigram_backward(train))
+    classifier = nltk.MaxentClassifier.train(trainfeat)
+
+    # this way predicts over-optimistically because the preceding tags/labels are known
+    #train_pred = list(map(classifier.classify, [tok for tok, lab in trainfeat]))
+    #train_toks, train_true = zip(*train)
+    #util.conlleval(train_toks, train_true, train_pred)
+
+    # this way should be more fair/honest
+    #train_pred = list(featurize_wordandtag_bigram(train, classify=classifier.classify))
+    #conlleval(train_toks, train_true, [pred for _, pred in train_pred])
+
+    # fair/honest for test
+    testfeat_pred = list(featurize_wordandtag_bigram_backward(test, classify=classifier.classify))
+    test_pred = [pred for _, pred in testfeat_pred]
+    test_toks, test_true = zip(*test)
+    results = conlleval(test_toks, test_true, test_pred)
+
+    experiment_name = inspect.currentframe().f_code.co_name
+    results["experiment_name"] = experiment_name
+    return results
+def featurize_wordandtag_trigram_backward(tokens, classify=False):
+    """ backwards trigram features: various permutations of 3 word/2 tag following 
+    context
+
+    input is a list/iterable of tokens, output/generator is list of dictionary features, like
+    [{word_nm1: the, word_n: dog}]
+    if tok == <s>, word_nm1 = "</s>" (padding)
+
+    """
+    next_tok = ["<S>","<S>"] # beginning of sentence marker
+    next_lab = ["O", "O"]
+    output = []
+    for tok, lab in reversed(tokens):
+        feature_dict = {}
+        # following words
+        feature_dict["word_n"] = tok
+        feature_dict["word_n+1"] = next_tok[-1]
+        feature_dict["word_n+2"] = next_tok[-2]        
+        feature_dict["word_n+1,word_n"] = next_tok[-1] + ","  + tok
+        feature_dict["word_n+2,word_n+1,word_n"] = next_tok[-2] + ","  + next_tok[-1] + "," + tok
+    
+        # following labels
+        feature_dict["lab_n+1"] = next_lab[-1]
+        feature_dict["lab_n+2"] = next_lab[-2]
+        feature_dict["lab_n+2,lab_n+1"] = next_lab[-2] + "," + next_lab[-1]
+        
+        #combined words and labels
+        # word_n plus one tag
+        feature_dict["lab_n+1,word_n"] = next_lab[-1] + ","  + tok
+        feature_dict["lab_n+2,word_n"] = next_lab[-2] + ","  + tok
+        # word_n+1 plus one tag
+        feature_dict["lab_n+1,word_n+1"] = next_lab[-1] + ","  + next_tok[-1]
+        feature_dict["lab_n+2,word_n+1"] = next_lab[-2] + ","  + next_tok[-1]
+        # word_n+2 plus one tag
+        feature_dict["lab_n+1,word_n+2"] = next_lab[-1] + ","  + next_tok[-2]
+        feature_dict["lab_n+1,word_n+2"] = next_lab[-1] + ","  + next_tok[-2]
+        # word_n plus two tags
+        feature_dict["lab_n+2,lab_n+1,word_n"] = next_lab[-2] + "," + next_lab[-1] + ","  + tok
+        # word_n+1 plus two tags
+        feature_dict["lab_n+2,lab_n+1,word_n+1"] = next_lab[-2] + "," + next_lab[-1] + ","  + next_tok[-1]
+        # word_n+2 plus two tags
+        feature_dict["lab_n+2,lab_n+1,word_n+1"] = next_lab[-2] + "," + next_lab[-1] + ","  + next_tok[-2]
+        # word_n and n+1 plus one tag
+        feature_dict["lab_n+1,word_n+1,word_n"] = next_lab[-1] + "," + next_tok[-1] + ","  + tok
+        feature_dict["lab_n+2,word_n+1,word_n"] = next_lab[-2] + "," + next_tok[-1] + ","  + tok
+        # word_n and n+2 plus one tag
+        feature_dict["lab_n+1,word_n+1,word_n"] = next_lab[-1] + "," + next_tok[-2] + ","  + tok
+        feature_dict["lab_n+2,word_n+1,word_n"] = next_lab[-2] + "," + next_tok[-2] + ","  + tok
+        # word_n+1 and n+2 plus one tag
+        feature_dict["lab_n+1,word_n+2,word_n+1"] = next_lab[-1] + "," + next_tok[-2] + "," + next_tok[-1]
+        feature_dict["lab_n+2,word_n+2,word_n+1"] = next_lab[-2] + "," + next_tok[-2] + "," + next_tok[-1]
+        # word_n and n+1 plus two tags
+        feature_dict["lab_n+2,lab_n+1,word_n+1,word_n"] = next_lab[-2] + "," + next_lab[-1] + "," + next_tok[-1] + ","  + tok
+        # word_n and n-2 plus two tags
+        feature_dict["lab_n+2,lab_n+1,word_n+2,word_n"] = next_lab[-2] + "," + next_lab[-1] + "," + next_tok[-2] + ","  + tok
+        # word_n-1 and n-2 plus two tags
+        feature_dict["lab_n+2,lab_n+1,word_n+2,word_n+1"] = next_lab[-2] + "," + next_lab[-1] + "," + next_tok[-2] + ","  + next_tok[-1]
+        # all
+        feature_dict["lab_n+2,lab_n+1,word_n+2,word_n+1,word_n"] = next_lab[-2] + ",", next_lab[-1] + "," + next_tok[-2] + "," + next_tok[-1] + "," + tok
+        
+        next_tok[-2] = next_tok[-1]
+        next_tok[-1] = tok
+        if classify: # this is the part that makes it honest fair
+            lab = classify(feature_dict)
+        next_lab[-2] = next_lab[-1]
+        next_lab[-1] = lab
+        output.append((feature_dict, lab))
+    return(reversed(output))
+
+def experiment_025_naivebayes_trigram_backward():
+    """ this is a naive bayes model using trigrams of backward context"""
+    train_nerda, dev_nerda, test_nerda = make_nerda_train_dev_test(format_fn=nerda_format_just_iob)
+    train = to_padded_tok_tag_tuples_from_nerda(train_nerda)
+    #dev_tup = to_padded_tok_tag_tuples_from_nerda(dev_nerda)
+    test = to_padded_tok_tag_tuples_from_nerda(test_nerda)
+    
+
+    trainfeat = list(featurize_wordandtag_trigram_backward(train))
+    classifier = nltk.NaiveBayesClassifier.train(trainfeat)
+
+    # this way predicts over-optimistically because the preceding tags/labels are known
+    #train_pred = list(map(classifier.classify, [tok for tok, lab in trainfeat]))
+    #train_toks, train_true = zip(*train)
+    #util.conlleval(train_toks, train_true, train_pred)
+
+    # this way should be more fair/honest
+    #train_pred = list(featurize_wordandtag_bigram(train, classify=classifier.classify))
+    #conlleval(train_toks, train_true, [pred for _, pred in train_pred])
+
+    # fair/honest for test
+    testfeat_pred = list(featurize_wordandtag_trigram_backward(test, classify=classifier.classify))
+    test_pred = [pred for _, pred in testfeat_pred]
+    test_toks, test_true = zip(*test)
+    results = conlleval(test_toks, test_true, test_pred)
+
+    experiment_name = inspect.currentframe().f_code.co_name
+    results["experiment_name"] = experiment_name
+    return results
+    
+def experiment_025_maxent_trigram_backward():
+    """ this is a maxent model using trigrams of backward context"""
+    train_nerda, dev_nerda, test_nerda = make_nerda_train_dev_test(format_fn=nerda_format_just_iob)
+    train = to_padded_tok_tag_tuples_from_nerda(train_nerda)
+    #dev_tup = to_padded_tok_tag_tuples_from_nerda(dev_nerda)
+    test = to_padded_tok_tag_tuples_from_nerda(test_nerda)
+    
+
+    trainfeat = list(featurize_wordandtag_trigram_backward(train))
+    classifier = nltk.MaxentClassifier.train(trainfeat)
+
+    # this way predicts over-optimistically because the preceding tags/labels are known
+    #train_pred = list(map(classifier.classify, [tok for tok, lab in trainfeat]))
+    #train_toks, train_true = zip(*train)
+    #util.conlleval(train_toks, train_true, train_pred)
+
+    # this way should be more fair/honest
+    #train_pred = list(featurize_wordandtag_bigram(train, classify=classifier.classify))
+    #conlleval(train_toks, train_true, [pred for _, pred in train_pred])
+
+    # fair/honest for test
+    testfeat_pred = list(featurize_wordandtag_trigram_backward(test, classify=classifier.classify))
+    test_pred = [pred for _, pred in testfeat_pred]
+    test_toks, test_true = zip(*test)
+    results = conlleval(test_toks, test_true, test_pred)
+
+    experiment_name = inspect.currentframe().f_code.co_name
+    results["experiment_name"] = experiment_name
+    return results
 def main():
     """ runs all the experiment functions """
     # create table to store results
